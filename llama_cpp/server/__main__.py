@@ -23,6 +23,7 @@ Then visit http://localhost:8000/docs to see the interactive API docs.
 """
 import os
 import argparse
+import inspect
 from typing import List, Literal, Union
 
 import uvicorn
@@ -91,10 +92,34 @@ if __name__ == "__main__":
                 help=f"{description}",
             )
 
+    # Extract uvicorn.run function arguments to dynamically add them to argparse
+    uvicorn_run_signature = inspect.signature(uvicorn.run)
+    for param_name, param in uvicorn_run_signature.parameters.items():
+        # Skip the "app" argument since it will be provided internally
+        if param_name == "app":
+            continue
+
+        # Handle special types and defaults
+        param_type = param.annotation if param.annotation != inspect.Parameter.empty else str
+        param_default = param.default if param.default != inspect.Parameter.empty else None
+
+        # Add argument to argparse
+        parser.add_argument(
+            f"--uvicorn-{param_name}",
+            type=param_type,
+            default=param_default,
+            help=f"Uvicorn setting for {param_name} (default: {repr(param_default).replace('%', '%%')})"
+        )
+
     args = parser.parse_args()
-    settings = Settings(**{k: v for k, v in vars(args).items() if v is not None})
+    settings = Settings(**{k: v for k, v in vars(args).items() if v is not None and not k.startswith("uvicorn_")})
     app = create_app(settings=settings)
 
-    uvicorn.run(
-        app, host=os.getenv("HOST", settings.host), port=int(os.getenv("PORT", settings.port))
-    )
+    # Separate out uvicorn arguments
+    uvicorn_args = {k[8:]: v for k, v in vars(args).items() if k.startswith("uvicorn_") and v is not None}
+
+    # Merge with other environment-based settings if needed
+    uvicorn_args['host'] = os.getenv("HOST", uvicorn_args.get('host', "127.0.0.1"))
+    uvicorn_args['port'] = int(os.getenv("PORT", uvicorn_args.get('port', 8000)))
+
+    uvicorn.run(app, **uvicorn_args)
